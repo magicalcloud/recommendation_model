@@ -36,15 +36,15 @@ class FM(nn.Module):
         return output.view(-1, 1)
 
 class deepfm(nn.Module):
-    def __init__(self, feat_sizes, sparse_feature_columns, dense_feature_columns,dnn_hidden_units=[400, 400,400], dnn_dropout=0.0, ebedding_size=4,
+    def __init__(self, feat_sizes, sparse_feature_columns, dense_feature_columns,dnn_hidden_units=[400, 400,400], dnn_dropout=0.0, embedding_size=4,
                  l2_reg_linear=0.00001, l2_reg_embedding=0.00001, l2_reg_dnn=0, init_std=0.0001, seed=1024,
-                 device='cpu'):
+                 device='cuda:0'):
         super(deepfm, self).__init__()
         self.feat_sizes = feat_sizes
         self.device = device
         self.dense_feature_columns = dense_feature_columns
         self.sparse_feature_columns = sparse_feature_columns
-        self.embedding_size = ebedding_size
+        self.embedding_size = embedding_size
         self.l2_reg_linear = l2_reg_linear
 
         self.bias = nn.Parameter(torch.zeros((1, )))
@@ -55,7 +55,7 @@ class deepfm(nn.Module):
                                             for feat in self.sparse_feature_columns})
         for tensor in self.embedding_dic.values():
             nn.init.normal_(tensor.weight, mean=0, std=self.init_std)
-        self.embedding_dic.to(self.device)
+        # self.embedding_dic.to(self.device)
 
         self.feature_index = defaultdict(int)
         start = 0
@@ -69,6 +69,7 @@ class deepfm(nn.Module):
         self.input_size = self.embedding_size * len(self.sparse_feature_columns)+len(self.dense_feature_columns)
         # fm
         self.fm = FM(self.input_size, 10)
+        # self.fm.to(self.device)
 
         # DNN
         self.dropout = nn.Dropout(self.dnn_dropout)
@@ -79,11 +80,16 @@ class deepfm(nn.Module):
             if 'weight' in name:
                 nn.init.normal_(tensor, mean=0, std=self.init_std)
         self.dnn_outlayer = nn.Linear(dnn_hidden_units[-1], 1, bias=False).to(self.device)
+        self.to(self.device)
 
 
     def forward(self, x):
         # x shape 1024*39
-
+        indexes = {}
+        for feat in self.sparse_feature_columns:
+            index = x[:, self.feature_index[feat]].cpu()
+            indexes[feat] = np.unique(index)
+            
         sparse_embedding = [self.embedding_dic[feat](x[:, self.feature_index[feat]].long()) for feat in self.sparse_feature_columns]
         sparse_embedding = torch.cat(sparse_embedding, dim=-1)
         # print(sparse_embedding.shape)  # batch * 208
@@ -109,7 +115,7 @@ class deepfm(nn.Module):
         dnn_logit = self.dnn_outlayer(input_x)
 
         y_pre = torch.sigmoid(fm_logit+dnn_logit+self.bias)
-        return y_pre
+        return y_pre, indexes
 
 
 

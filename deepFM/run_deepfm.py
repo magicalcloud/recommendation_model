@@ -33,7 +33,7 @@ if __name__=="__main__":
     batch_size = 1024
     lr = 0.00005
     wd = 0.00001
-    epoches = 100
+    epoches = 1
 
     seed = 1024
     torch.manual_seed(seed)  # 为CPU设置随机种子
@@ -45,7 +45,10 @@ if __name__=="__main__":
     sparse_features = ['C' + str(i) for i in range(1, 27)]
     dense_features = ['I' + str(i) for i in range(1, 14)]
     col_names = ['label'] + dense_features + sparse_features
-    df = pd.read_csv('data/dac_sample.txt', names=col_names, sep='\t')
+    df = pd.read_csv('/mnt/ssd/dataset/kaggle/train.txt', names=col_names, sep='\t')
+    df = df.sample(frac=0.1)
+    df.to_csv("/mnt/ssd/dataset/kaggle/train_sample.txt", index=True)
+    
     feature_names = dense_features + sparse_features
 
     df[sparse_features] = df[sparse_features].fillna('-1', )
@@ -61,6 +64,7 @@ if __name__=="__main__":
 
     feat_size1 = {feat: 1 for feat in dense_features}
     feat_size2 = {feat: len(df[feat].unique()) for feat in sparse_features}
+    print(feat_size2)
     feat_sizes = {}
     feat_sizes.update(feat_size1)
     feat_sizes.update(feat_size2)
@@ -72,10 +76,10 @@ if __name__=="__main__":
     train_model_input = {name: train[name] for name in feature_names}
     test_model_input = {name: test[name] for name in feature_names}
 
-    device = 'cpu'
+    device = 'cuda:0'
 
     model = deepfm(feat_sizes, sparse_feature_columns=sparse_features, dense_feature_columns=dense_features,
-                   dnn_hidden_units=[1000, 500, 250], dnn_dropout=0.9, ebedding_size=16,
+                   dnn_hidden_units=[1000, 500, 250], embedding_size=16,
                    l2_reg_linear=1e-3, device=device)
 
     train_label = pd.DataFrame(train['label'])
@@ -91,7 +95,8 @@ if __name__=="__main__":
     test_loader = DataLoader(dataset=test_tensor_data, shuffle=False, batch_size=batch_size)
 
     loss_func = nn.BCELoss(reduction='mean')
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    # optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    optimizer = optim.SGD(model.parameters(), lr=lr, weight_decay=wd)
 
     for epoch in range(epoches):
         total_loss_epoch = 0.0
@@ -102,7 +107,7 @@ if __name__=="__main__":
             x = x.to(device).float()
             y = y.to(device).float()
 
-            y_hat = model(x)
+            y_hat, indexes = model(x)
 
             optimizer.zero_grad()
             loss = loss_func(y_hat, y)
@@ -110,6 +115,23 @@ if __name__=="__main__":
             optimizer.step()
             total_loss_epoch += loss.item()
             total_tmp += 1
+            
+            diff = {}
+            for name,p in model.state_dict().items():
+                if "embedding" in name:
+                    col = name.split('.')[1]
+                    print(col)
+                    updated_emb={}
+                    for idx in indexes[col]:
+                        idx = int(idx.item())
+                        updated_emb[idx] = p[idx].detach().data.cpu()
+                    diff[name] = updated_emb
+                    print("differential size,", len(updated_emb)," param size, ",p.size()[0])
+              
+            torch.save(diff, "diff.pt")
+            torch.save(model, "model.pt")
+            break
 
-        auc = get_auc(test_loader, model)
-        print('epoch/epoches: {}/{}, train loss: {:.3f}, test auc: {:.3f}'.format(epoch, epoches, total_loss_epoch / total_tmp, auc))
+        # auc = get_auc(test_loader, model) 
+        # print('epoch/epoches: {}/{}, train loss: {:.3f}, test auc: {:.3f}'.format(epoch, epoches, total_loss_epoch / total_tmp, auc))
+        
